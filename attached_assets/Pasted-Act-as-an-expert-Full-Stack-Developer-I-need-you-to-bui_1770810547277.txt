@@ -1,0 +1,38 @@
+Act as an expert Full-Stack Developer. I need you to build a "Mobile-First" Attendance Application for University Faculty that works completely offline.
+
+**Project Context:**
+Due to network issues on campus, faculty cannot access the server. This app must run locally on the phone, save data to the device, and export attendance via WhatsApp.
+
+**Tech Stack:**
+- Framework: React (Vite)
+- Language: JavaScript/TypeScript
+- Styling: Tailwind CSS (Mobile-responsive UI)
+- Database: Dexie.js (Wrapper for IndexedDB) for offline persistent storage
+- Icons: Lucide-React
+
+**Key Features & Requirements:**
+
+1. **Database Schema (Offline First):**
+   - Create a 'Faculty' table (ID, Name, WhatsApp Number).
+   - Create a 'Class' table (ID, Course Name, Subject Code).
+   - Create a 'Student' table (ID, Name, Roll Number, ClassID).
+   - Create an 'Attendance' table (ID, StudentID, Date, Status, SessionID).
+
+2. **User Interface (Mobile First):**
+   - **Dashboard:** A simple screen to select a Class.
+   - **Student Management:** A form to add/edit students manually (since we are offline).
+   - **Attendance Screen:** Display a list of students for the selected class with "Present/Absent" toggles. Default all to "Absent" or "Present" (toggleable).
+   - **History:** View past attendance records by date.
+
+3. **Core Functionality - The WhatsApp Logic:**
+   - Add a "Submit & Send" button on the Attendance Screen.
+   - When clicked, this button should:
+     a. Save the records to Dexie.js.
+     b. Generate a formatted text summary (e.g., "Date: [Date], Class: [Name], Absentees: [Roll Nos]").
+     c. Use `window.open` with the WhatsApp URL scheme: `https://wa.me/?text=[EncodedMessage]` so it opens the WhatsApp app with the message pre-filled.
+
+4. **Offline Capability:**
+   - Ensure the app does not try to fetch anything from an external API. All data must live inside the browser's IndexedDB.
+
+**Deliverable:**
+Please generate the full project structure, the relevant components (Dashboard, AttendanceList, StudentForm), and the logic for the Dexie.js database setup.
