@@ -1,11 +1,12 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { queryClient } from "@/lib/query-client";
+import { initializeDefaults } from "@/lib/storage";
 import {
   useFonts,
   Inter_400Regular,
@@ -33,6 +34,7 @@ function RootLayoutNav() {
 }
 
 export default function RootLayout() {
+  const [appReady, setAppReady] = useState(false);
   const [fontsLoaded] = useFonts({
     Inter_400Regular,
     Inter_500Medium,
@@ -42,11 +44,19 @@ export default function RootLayout() {
 
   useEffect(() => {
     if (fontsLoaded) {
-      SplashScreen.hideAsync();
+      initializeDefaults()
+        .then(() => {
+          setAppReady(true);
+          SplashScreen.hideAsync();
+        })
+        .catch(() => {
+          setAppReady(true);
+          SplashScreen.hideAsync();
+        });
     }
   }, [fontsLoaded]);
 
-  if (!fontsLoaded) return null;
+  if (!fontsLoaded || !appReady) return null;
 
   return (
     <ErrorBoundary>

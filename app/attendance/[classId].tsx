@@ -45,7 +45,12 @@ export default function AttendanceScreen() {
     const cls = classes.find((c) => c.id === classId);
     setClassItem(cls || null);
     const studs = await getStudents(classId);
-    studs.sort((a, b) => a.rollNumber.localeCompare(b.rollNumber, undefined, { numeric: true }));
+    studs.sort((a, b) => {
+      if (!a.rollNumber && !b.rollNumber) return a.name.localeCompare(b.name);
+      if (!a.rollNumber) return 1;
+      if (!b.rollNumber) return -1;
+      return a.rollNumber.localeCompare(b.rollNumber, undefined, { numeric: true });
+    });
     setStudents(studs);
     const map: Record<string, "present" | "absent"> = {};
     studs.forEach((s) => {
@@ -125,7 +130,7 @@ export default function AttendanceScreen() {
       if (absentStudents.length > 0) {
         message += `\n*Absentees (${absentStudents.length}):*\n`;
         absentStudents.forEach((s) => {
-          message += `- ${s.rollNumber} - ${s.name}\n`;
+          message += s.rollNumber ? `- ${s.rollNumber} - ${s.name}\n` : `- ${s.name}\n`;
         });
       } else {
         message += `\nAll students present!\n`;
@@ -199,7 +204,9 @@ export default function AttendanceScreen() {
       >
         <View style={{ flex: 1 }}>
           <Text style={styles.studentName} numberOfLines={1}>{item.name}</Text>
-          <Text style={styles.studentRoll}>{item.rollNumber}</Text>
+          {item.rollNumber ? (
+            <Text style={styles.studentRoll}>{item.rollNumber}</Text>
+          ) : null}
         </View>
         <Pressable
           onPress={() => toggleStatus(item.id)}

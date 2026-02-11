@@ -15,11 +15,15 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams, useFocusEffect } from "expo-router";
 import * as Haptics from "expo-haptics";
+import * as DocumentPicker from "expo-document-picker";
+import * as FileSystem from "expo-file-system";
+import * as XLSX from "xlsx";
 import Colors from "@/constants/colors";
 import {
   getClasses,
   getStudents,
   addStudent,
+  addStudentsBulk,
   updateStudent,
   deleteStudent,
   ClassItem,
@@ -36,6 +40,7 @@ export default function ClassDetailScreen() {
   const [editingStudent, setEditingStudent] = useState<Student | null>(null);
   const [studentName, setStudentName] = useState("");
   const [rollNumber, setRollNumber] = useState("");
+  const [importing, setImporting] = useState(false);
 
   const loadData = useCallback(async () => {
     if (!id) return;
@@ -44,7 +49,12 @@ export default function ClassDetailScreen() {
     const cls = classes.find((c) => c.id === id);
     setClassItem(cls || null);
     const studs = await getStudents(id);
-    studs.sort((a, b) => a.rollNumber.localeCompare(b.rollNumber, undefined, { numeric: true }));
+    studs.sort((a, b) => {
+      if (!a.rollNumber && !b.rollNumber) return a.name.localeCompare(b.name);
+      if (!a.rollNumber) return 1;
+      if (!b.rollNumber) return -1;
+      return a.rollNumber.localeCompare(b.rollNumber, undefined, { numeric: true });
+    });
     setStudents(studs);
     setLoading(false);
   }, [id]);
@@ -56,8 +66,8 @@ export default function ClassDetailScreen() {
   );
 
   const handleSave = async () => {
-    if (!studentName.trim() || !rollNumber.trim()) {
-      Alert.alert("Required", "Please fill in both fields.");
+    if (!studentName.trim()) {
+      Alert.alert("Required", "Please enter the student name.");
       return;
     }
     if (editingStudent) {
@@ -106,6 +116,129 @@ export default function ClassDetailScreen() {
     setModalVisible(true);
   };
 
+  const handleBulkImport = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: [
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          "application/vnd.ms-excel",
+          "text/csv",
+          "text/comma-separated-values",
+          "*/*",
+        ],
+        copyToCacheDirectory: true,
+      });
+
+      if (result.canceled || !result.assets || result.assets.length === 0) return;
+
+      setImporting(true);
+      const file = result.assets[0];
+      const uri = file.uri;
+      const fileName = file.name || "";
+
+      let parsedStudents: { name: string; rollNumber: string }[] = [];
+
+      if (Platform.OS === "web") {
+        const response = await globalThis.fetch(uri);
+        const arrayBuffer = await response.arrayBuffer();
+        const data = new Uint8Array(arrayBuffer);
+        const workbook = XLSX.read(data, { type: "array" });
+        parsedStudents = parseWorkbook(workbook);
+      } else {
+        const fileContent = await FileSystem.readAsStringAsync(uri, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        const workbook = XLSX.read(fileContent, { type: "base64" });
+        parsedStudents = parseWorkbook(workbook);
+      }
+
+      if (parsedStudents.length === 0) {
+        Alert.alert(
+          "No Students Found",
+          "Could not find student data in the file. Make sure your file has columns like 'Name', 'Student Name', 'Roll Number', 'Roll No', or 'Enrollment No'."
+        );
+        setImporting(false);
+        return;
+      }
+
+      const bulkItems = parsedStudents.map((s) => ({
+        name: s.name,
+        rollNumber: s.rollNumber,
+        classId: id!,
+      }));
+
+      const count = await addStudentsBulk(bulkItems);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      Alert.alert("Import Complete", `Successfully imported ${count} students.`);
+      loadData();
+    } catch (err: any) {
+      Alert.alert("Import Error", err?.message || "Failed to import file. Please try again.");
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const parseWorkbook = (workbook: XLSX.WorkBook): { name: string; rollNumber: string }[] => {
+    const sheetName = workbook.SheetNames[0];
+    if (!sheetName) return [];
+    const sheet = workbook.Sheets[sheetName];
+    const jsonData: Record<string, any>[] = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+
+    if (jsonData.length === 0) return [];
+
+    const nameKeys = ["name", "student name", "student_name", "studentname", "full name", "fullname", "full_name"];
+    const rollKeys = [
+      "roll number", "roll no", "rollno", "roll_number", "rollnumber",
+      "enrollment no", "enrollment number", "enrollment_no", "enrollmentno",
+      "enroll no", "enroll_no", "reg no", "reg number", "registration number",
+      "id", "student id", "studentid", "s.no", "sno", "sr no", "sr. no",
+    ];
+
+    const headers = Object.keys(jsonData[0]).map((h) => h.toLowerCase().trim());
+
+    let nameCol = "";
+    let rollCol = "";
+
+    for (const h of Object.keys(jsonData[0])) {
+      const lower = h.toLowerCase().trim();
+      if (!nameCol && nameKeys.includes(lower)) nameCol = h;
+      if (!rollCol && rollKeys.includes(lower)) rollCol = h;
+    }
+
+    if (!nameCol) {
+      for (const h of Object.keys(jsonData[0])) {
+        const lower = h.toLowerCase().trim();
+        if (lower.includes("name") && !lower.includes("course") && !lower.includes("subject")) {
+          nameCol = h;
+          break;
+        }
+      }
+    }
+
+    if (!rollCol) {
+      for (const h of Object.keys(jsonData[0])) {
+        const lower = h.toLowerCase().trim();
+        if (lower.includes("roll") || lower.includes("enroll") || lower.includes("reg")) {
+          rollCol = h;
+          break;
+        }
+      }
+    }
+
+    if (!nameCol) return [];
+
+    const students: { name: string; rollNumber: string }[] = [];
+    for (const row of jsonData) {
+      const name = String(row[nameCol] || "").trim();
+      const roll = rollCol ? String(row[rollCol] || "").trim() : "";
+      if (name) {
+        students.push({ name, rollNumber: roll });
+      }
+    }
+
+    return students;
+  };
+
   const webTopInset = Platform.OS === "web" ? 67 : 0;
 
   const renderStudent = ({ item, index }: { item: Student; index: number }) => (
@@ -122,7 +255,13 @@ export default function ClassDetailScreen() {
       </View>
       <View style={{ flex: 1 }}>
         <Text style={styles.studentName} numberOfLines={1}>{item.name}</Text>
-        <Text style={styles.studentRoll}>{item.rollNumber}</Text>
+        {item.rollNumber ? (
+          <Text style={styles.studentRoll}>{item.rollNumber}</Text>
+        ) : (
+          <Text style={[styles.studentRoll, { fontStyle: "italic" as const, color: Colors.light.tabIconDefault }]}>
+            No enrollment no.
+          </Text>
+        )}
       </View>
       <Ionicons name="chevron-forward" size={16} color={Colors.light.tabIconDefault} />
     </Pressable>
@@ -145,24 +284,40 @@ export default function ClassDetailScreen() {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
             setModalVisible(true);
           }}
-          style={styles.addBtn}
+          style={styles.headerIconBtn}
         >
           <Ionicons name="person-add-outline" size={20} color={Colors.light.tint} />
         </Pressable>
       </View>
 
-      {students.length > 0 && (
+      <View style={styles.actionRow}>
+        {students.length > 0 && (
+          <Pressable
+            style={({ pressed }) => [styles.takeAttendanceBtn, pressed && { opacity: 0.9 }]}
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+              router.push({ pathname: "/attendance/[classId]", params: { classId: id! } });
+            }}
+          >
+            <Ionicons name="checkmark-done" size={18} color="#fff" />
+            <Text style={styles.takeAttendanceText}>Take Attendance</Text>
+          </Pressable>
+        )}
         <Pressable
-          style={({ pressed }) => [styles.takeAttendanceBtn, pressed && { opacity: 0.9 }]}
-          onPress={() => {
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-            router.push({ pathname: "/attendance/[classId]", params: { classId: id! } });
-          }}
+          style={({ pressed }) => [
+            styles.importBtn,
+            pressed && { opacity: 0.9 },
+            importing && { opacity: 0.6 },
+          ]}
+          onPress={handleBulkImport}
+          disabled={importing}
         >
-          <Ionicons name="checkmark-done" size={20} color="#fff" />
-          <Text style={styles.takeAttendanceText}>Take Attendance</Text>
+          <Ionicons name="cloud-upload-outline" size={18} color={Colors.light.tint} />
+          <Text style={styles.importBtnText}>
+            {importing ? "Importing..." : "Import Excel"}
+          </Text>
         </Pressable>
-      )}
+      </View>
 
       {loading ? (
         <View style={styles.center}>
@@ -173,15 +328,24 @@ export default function ClassDetailScreen() {
           <Ionicons name="people-outline" size={64} color={Colors.light.border} />
           <Text style={styles.emptyTitle}>No Students</Text>
           <Text style={styles.emptyText}>
-            Add students to this class to start taking attendance
+            Add students manually or import from an Excel/CSV file
           </Text>
-          <Pressable
-            style={({ pressed }) => [styles.addFirstBtn, pressed && { opacity: 0.85 }]}
-            onPress={() => setModalVisible(true)}
-          >
-            <Ionicons name="person-add-outline" size={18} color="#fff" />
-            <Text style={styles.addFirstBtnText}>Add Student</Text>
-          </Pressable>
+          <View style={styles.emptyActions}>
+            <Pressable
+              style={({ pressed }) => [styles.addFirstBtn, pressed && { opacity: 0.85 }]}
+              onPress={() => setModalVisible(true)}
+            >
+              <Ionicons name="person-add-outline" size={18} color="#fff" />
+              <Text style={styles.addFirstBtnText}>Add Manually</Text>
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [styles.importFirstBtn, pressed && { opacity: 0.85 }]}
+              onPress={handleBulkImport}
+            >
+              <Ionicons name="cloud-upload-outline" size={18} color={Colors.light.tint} />
+              <Text style={styles.importFirstBtnText}>Import Excel</Text>
+            </Pressable>
+          </View>
         </View>
       ) : (
         <FlatList
@@ -190,6 +354,9 @@ export default function ClassDetailScreen() {
           renderItem={renderStudent}
           contentContainerStyle={[styles.list, { paddingBottom: 40 }]}
           showsVerticalScrollIndicator={false}
+          ListHeaderComponent={
+            <Text style={styles.listHeader}>{students.length} student{students.length !== 1 ? "s" : ""}</Text>
+          }
         />
       )}
 
@@ -213,7 +380,7 @@ export default function ClassDetailScreen() {
                 <Ionicons name="close" size={24} color={Colors.light.textSecondary} />
               </Pressable>
             </View>
-            <Text style={styles.inputLabel}>Student Name</Text>
+            <Text style={styles.inputLabel}>Student Name *</Text>
             <TextInput
               style={styles.input}
               placeholder="e.g., Rahul Kumar"
@@ -222,7 +389,7 @@ export default function ClassDetailScreen() {
               placeholderTextColor={Colors.light.tabIconDefault}
               autoFocus
             />
-            <Text style={styles.inputLabel}>Roll Number</Text>
+            <Text style={styles.inputLabel}>Enrollment / Roll Number (optional)</Text>
             <TextInput
               style={styles.input}
               placeholder="e.g., 2024CS001"
@@ -270,27 +437,55 @@ const styles = StyleSheet.create({
     color: Colors.light.textSecondary,
     marginTop: 1,
   },
-  addBtn: {
+  headerIconBtn: {
     width: 40,
     height: 40,
     alignItems: "center",
     justifyContent: "center",
   },
+  actionRow: {
+    flexDirection: "row",
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    gap: 10,
+  },
   takeAttendanceBtn: {
+    flex: 1,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: Colors.light.tint,
-    marginHorizontal: 16,
-    marginTop: 16,
-    padding: 14,
+    padding: 13,
     borderRadius: 12,
-    gap: 8,
+    gap: 6,
   },
   takeAttendanceText: {
     color: "#fff",
-    fontSize: 16,
+    fontSize: 14,
     fontFamily: "Inter_600SemiBold",
+  },
+  importBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1.5,
+    borderColor: Colors.light.tint,
+    padding: 13,
+    borderRadius: 12,
+    gap: 6,
+  },
+  importBtnText: {
+    color: Colors.light.tint,
+    fontSize: 14,
+    fontFamily: "Inter_600SemiBold",
+  },
+  listHeader: {
+    fontSize: 13,
+    fontFamily: "Inter_500Medium",
+    color: Colors.light.textSecondary,
+    marginBottom: 8,
+    textTransform: "uppercase" as const,
+    letterSpacing: 0.5,
   },
   list: { padding: 16, gap: 2 },
   studentRow: {
@@ -346,19 +541,38 @@ const styles = StyleSheet.create({
     color: Colors.light.textSecondary,
     textAlign: "center",
   },
+  emptyActions: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 16,
+  },
   addFirstBtn: {
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: Colors.light.tint,
     borderRadius: 12,
     paddingVertical: 12,
-    paddingHorizontal: 20,
-    gap: 8,
-    marginTop: 12,
+    paddingHorizontal: 16,
+    gap: 6,
   },
   addFirstBtnText: {
     color: "#fff",
-    fontSize: 15,
+    fontSize: 14,
+    fontFamily: "Inter_600SemiBold",
+  },
+  importFirstBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1.5,
+    borderColor: Colors.light.tint,
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    gap: 6,
+  },
+  importFirstBtnText: {
+    color: Colors.light.tint,
+    fontSize: 14,
     fontFamily: "Inter_600SemiBold",
   },
   modalOverlay: {

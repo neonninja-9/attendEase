@@ -42,10 +42,41 @@ const KEYS = {
   STUDENTS: "students",
   ATTENDANCE: "attendance_records",
   SESSIONS: "attendance_sessions",
+  INITIALIZED: "app_initialized",
 };
+
+const DEFAULT_CLASSES: Omit<ClassItem, "id">[] = [
+  { subjectCode: "BSU443", courseName: "Behavioural Science- IV (Values & Ethics for Personal & Professional Development)" },
+  { subjectCode: "BCU441", courseName: "Communication Skills - IV (Term Paper)" },
+  { subjectCode: "CSE402", courseName: "Computer Organization and Architecture" },
+  { subjectCode: "CSE405", courseName: "Cryptography & Network Security" },
+  { subjectCode: "CSE401", courseName: "Discrete Mathematics" },
+  { subjectCode: "CSE403", courseName: "Java Programming" },
+  { subjectCode: "CSE423", courseName: "Java Programming Lab" },
+  { subjectCode: "CSE404", courseName: "Operating Systems" },
+  { subjectCode: "CSE424", courseName: "Operating Systems Lab" },
+  { subjectCode: "FLU444", courseName: "French - IV" },
+  { subjectCode: "CSA401", courseName: "Neural Networks and Deep Learning" },
+  { subjectCode: "CSA421", courseName: "Neural Networks and Deep Learning Lab" },
+];
 
 function genId(): string {
   return Crypto.randomUUID();
+}
+
+export async function initializeDefaults(): Promise<void> {
+  const initialized = await AsyncStorage.getItem(KEYS.INITIALIZED);
+  if (initialized) return;
+
+  const existingClasses = await getClasses();
+  if (existingClasses.length === 0) {
+    const classes: ClassItem[] = DEFAULT_CLASSES.map((c) => ({
+      id: genId(),
+      ...c,
+    }));
+    await AsyncStorage.setItem(KEYS.CLASSES, JSON.stringify(classes));
+  }
+  await AsyncStorage.setItem(KEYS.INITIALIZED, "true");
 }
 
 export async function getFaculty(): Promise<Faculty | null> {
@@ -110,6 +141,19 @@ export async function addStudent(item: Omit<Student, "id">): Promise<Student> {
   students.push(newStudent);
   await AsyncStorage.setItem(KEYS.STUDENTS, JSON.stringify(students));
   return newStudent;
+}
+
+export async function addStudentsBulk(items: Omit<Student, "id">[]): Promise<number> {
+  const students = await getStudents();
+  const newStudents: Student[] = items.map((item) => ({
+    id: genId(),
+    ...item,
+  }));
+  await AsyncStorage.setItem(
+    KEYS.STUDENTS,
+    JSON.stringify([...students, ...newStudents])
+  );
+  return newStudents.length;
 }
 
 export async function updateStudent(id: string, updates: Partial<Student>): Promise<void> {

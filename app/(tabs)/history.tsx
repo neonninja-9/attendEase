@@ -186,7 +186,7 @@ export default function HistoryScreen() {
               return (
                 <View key={r.id} style={styles.recordRow}>
                   <Text style={styles.recordRoll}>
-                    {student?.rollNumber || "?"}
+                    {student?.rollNumber || "-"}
                   </Text>
                   <Text style={styles.recordName} numberOfLines={1}>
                     {student?.name || "Unknown"}
