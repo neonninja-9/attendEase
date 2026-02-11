@@ -42,8 +42,10 @@ const KEYS = {
   STUDENTS: "students",
   ATTENDANCE: "attendance_records",
   SESSIONS: "attendance_sessions",
-  INITIALIZED: "app_initialized",
+  INITIALIZED: "app_initialized_v2",
 };
+
+const EXCLUDED_CODES = ["BCU441", "CSA401", "CSA421"];
 
 const DEFAULT_CLASSES: Omit<ClassItem, "id">[] = [
   { subjectCode: "BSU443", courseName: "Behavioural Science- IV (Values & Ethics for Personal & Professional Development)" },
@@ -60,6 +62,64 @@ const DEFAULT_CLASSES: Omit<ClassItem, "id">[] = [
   { subjectCode: "CSA421", courseName: "Neural Networks and Deep Learning Lab" },
 ];
 
+const DEFAULT_STUDENT_NAMES = [
+  "ANJALI BHADORIA",
+  "VINEET MITTAL",
+  "SUNDRAM SINGH",
+  "NITYA JAIN",
+  "ABHISHEK SHARMA",
+  "SAGAR JOSHI",
+  "YASH RANA",
+  "YASH SHARMA",
+  "GOURAV SHARMA",
+  "GAURAV SINGH CHAUHAN",
+  "PRATIK MISHRA",
+  "PIYUSH THAKUR",
+  "HARSHIT PAL",
+  "KANISHK RAJ",
+  "ARYAMA SINGH TOMAR",
+  "ANURAG SINGH",
+  "ANKIT",
+  "DEVANSH GUPTA",
+  "BHANU PRATAP SINGH CHAUHAN",
+  "AYUSH VYAS",
+  "NISHANT KUSHWAH",
+  "RAGINI PARIHAR",
+  "LOVE SHARMA",
+  "ADITYA TIWARI",
+  "DEEPAK SINGH GURJAR",
+  "R HIM KHAN",
+  "LAVLESH",
+  "BHAKTI GOYAL",
+  "ABHISHEK SHRIVASTAVA",
+  "ANSHU KUMAR",
+  "NITIN RAJAK",
+  "PRIYANKA",
+  "AYAAN SIDDIQUI",
+  "GANPAT SINGH TOMAR",
+  "HARI NANDAN",
+  "ADITYA SINGH TOMAR",
+  "SAJAL SHARMA",
+  "VINEET KAURAV",
+  "JAIDEEP KAMTHAN",
+  "NIKHIL CHAUHAN",
+  "VIKASH VIKRAM SINGH",
+  "KRISHNA",
+  "TANMAY JAIN",
+  "JATIN KUSHWAH",
+  "TANU SONI",
+  "TAPSHYA MANGAL",
+  "KM NEHA",
+  "HARSH PARMAR",
+  "VISHWAJEET GURJAR",
+  "ADITYA AGRAWAL",
+  "MANASWI PRAKASH",
+  "KSHITIJ SINGH",
+  "DHRUV JAIN",
+  "MOHIT SHARMA",
+  "HIMANSHU SHARMA",
+];
+
 function genId(): string {
   return Crypto.randomUUID();
 }
@@ -69,14 +129,61 @@ export async function initializeDefaults(): Promise<void> {
   if (initialized) return;
 
   const existingClasses = await getClasses();
+  let classes: ClassItem[];
+
   if (existingClasses.length === 0) {
-    const classes: ClassItem[] = DEFAULT_CLASSES.map((c) => ({
+    classes = DEFAULT_CLASSES.map((c) => ({
       id: genId(),
       ...c,
     }));
     await AsyncStorage.setItem(KEYS.CLASSES, JSON.stringify(classes));
+  } else {
+    classes = existingClasses;
   }
+
+  const eligibleClasses = classes.filter(
+    (c) => !EXCLUDED_CODES.includes(c.subjectCode)
+  );
+
+  const existingStudents = await getStudents();
+  const newStudents: Student[] = [];
+
+  for (const cls of eligibleClasses) {
+    const classStudents = existingStudents.filter((s) => s.classId === cls.id);
+    const existingNames = new Set(classStudents.map((s) => s.name.toLowerCase().trim()));
+
+    for (const name of DEFAULT_STUDENT_NAMES) {
+      if (!existingNames.has(name.toLowerCase().trim())) {
+        newStudents.push({
+          id: genId(),
+          name,
+          rollNumber: "",
+          classId: cls.id,
+        });
+      }
+    }
+  }
+
+  if (newStudents.length > 0) {
+    await AsyncStorage.setItem(
+      KEYS.STUDENTS,
+      JSON.stringify([...existingStudents, ...newStudents])
+    );
+  }
+
   await AsyncStorage.setItem(KEYS.INITIALIZED, "true");
+}
+
+export async function checkDuplicateStudentName(
+  classId: string,
+  name: string,
+  excludeId?: string
+): Promise<boolean> {
+  const students = await getStudents(classId);
+  const normalizedName = name.toLowerCase().trim();
+  return students.some(
+    (s) => s.name.toLowerCase().trim() === normalizedName && s.id !== excludeId
+  );
 }
 
 export async function getFaculty(): Promise<Faculty | null> {
@@ -143,17 +250,32 @@ export async function addStudent(item: Omit<Student, "id">): Promise<Student> {
   return newStudent;
 }
 
-export async function addStudentsBulk(items: Omit<Student, "id">[]): Promise<number> {
+export async function addStudentsBulk(items: Omit<Student, "id">[]): Promise<{ added: number; skipped: number }> {
   const students = await getStudents();
-  const newStudents: Student[] = items.map((item) => ({
-    id: genId(),
-    ...item,
-  }));
-  await AsyncStorage.setItem(
-    KEYS.STUDENTS,
-    JSON.stringify([...students, ...newStudents])
-  );
-  return newStudents.length;
+  const newStudents: Student[] = [];
+  let skipped = 0;
+
+  for (const item of items) {
+    const classStudents = [...students, ...newStudents].filter((s) => s.classId === item.classId);
+    const normalizedName = item.name.toLowerCase().trim();
+    const isDuplicate = classStudents.some(
+      (s) => s.name.toLowerCase().trim() === normalizedName
+    );
+    if (isDuplicate) {
+      skipped++;
+    } else {
+      newStudents.push({ id: genId(), ...item });
+    }
+  }
+
+  if (newStudents.length > 0) {
+    await AsyncStorage.setItem(
+      KEYS.STUDENTS,
+      JSON.stringify([...students, ...newStudents])
+    );
+  }
+
+  return { added: newStudents.length, skipped };
 }
 
 export async function updateStudent(id: string, updates: Partial<Student>): Promise<void> {

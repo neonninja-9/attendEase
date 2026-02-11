@@ -26,6 +26,7 @@ import {
   addStudentsBulk,
   updateStudent,
   deleteStudent,
+  checkDuplicateStudentName,
   ClassItem,
   Student,
 } from "@/lib/storage";
@@ -68,6 +69,18 @@ export default function ClassDetailScreen() {
   const handleSave = async () => {
     if (!studentName.trim()) {
       Alert.alert("Required", "Please enter the student name.");
+      return;
+    }
+    const isDuplicate = await checkDuplicateStudentName(
+      id!,
+      studentName.trim(),
+      editingStudent?.id
+    );
+    if (isDuplicate) {
+      Alert.alert(
+        "Duplicate Name",
+        `A student named "${studentName.trim()}" already exists in this class.`
+      );
       return;
     }
     if (editingStudent) {
@@ -167,9 +180,13 @@ export default function ClassDetailScreen() {
         classId: id!,
       }));
 
-      const count = await addStudentsBulk(bulkItems);
+      const importResult = await addStudentsBulk(bulkItems);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      Alert.alert("Import Complete", `Successfully imported ${count} students.`);
+      let msg = `Successfully imported ${importResult.added} students.`;
+      if (importResult.skipped > 0) {
+        msg += `\n${importResult.skipped} duplicate name${importResult.skipped > 1 ? "s" : ""} skipped.`;
+      }
+      Alert.alert("Import Complete", msg);
       loadData();
     } catch (err: any) {
       Alert.alert("Import Error", err?.message || "Failed to import file. Please try again.");
