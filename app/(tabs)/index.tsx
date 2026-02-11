@@ -45,7 +45,7 @@ export default function DashboardScreen() {
     const allClasses = await getClasses();
     const withStats: ClassWithStats[] = await Promise.all(
       allClasses.map(async (c) => {
-        const students = await getStudents(c.id);
+        const students = await getStudents();
         const sessions = await getSessions(c.id);
         return { ...c, studentCount: students.length, sessionCount: sessions.length };
       })
@@ -162,15 +162,28 @@ export default function DashboardScreen() {
     <View style={styles.container}>
       <View style={[styles.header, { paddingTop: insets.top + 12 + webTopInset }]}>
         <Text style={styles.headerTitle}>My Classes</Text>
-        <Pressable
-          onPress={() => {
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-            setModalVisible(true);
-          }}
-          style={({ pressed }) => [styles.addBtn, pressed && { opacity: 0.7 }]}
-        >
-          <Ionicons name="add" size={28} color={Colors.light.tint} />
-        </Pressable>
+        <View style={styles.headerBtnRow}>
+          <Pressable
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              // @ts-ignore
+              router.push("/students/manage");
+            }}
+            style={({ pressed }) => [styles.manageBtn, pressed && { opacity: 0.7 }]}
+          >
+            <Ionicons name="people" size={20} color={Colors.light.tint} />
+            <Text style={styles.manageBtnText}>Manage Students</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              setModalVisible(true);
+            }}
+            style={({ pressed }) => [styles.addBtn, pressed && { opacity: 0.7 }]}
+          >
+            <Ionicons name="add" size={28} color={Colors.light.tint} />
+          </Pressable>
+        </View>
       </View>
 
       {loading ? (
@@ -271,6 +284,27 @@ const styles = StyleSheet.create({
     height: 40,
     alignItems: "center",
     justifyContent: "center",
+    backgroundColor: Colors.light.accentLight,
+    borderRadius: 20,
+  },
+  headerBtnRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  manageBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: Colors.light.accentLight,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+    gap: 6,
+  },
+  manageBtnText: {
+    fontSize: 13,
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.light.tint,
   },
   list: { padding: 16, gap: 12 },
   classCard: {

@@ -52,7 +52,7 @@ export default function HistoryScreen() {
         )
         .map(async (session) => {
           const records = await getAttendanceRecords(session.id);
-          const students = await getStudents(session.classId);
+          const students = await getStudents();
           return {
             session,
             classItem: classMap.get(session.classId) || null,
@@ -134,8 +134,8 @@ export default function HistoryScreen() {
                     percentage >= 75
                       ? Colors.light.successLight
                       : percentage >= 50
-                      ? Colors.light.warningLight
-                      : Colors.light.dangerLight,
+                        ? Colors.light.warningLight
+                        : Colors.light.dangerLight,
                 },
               ]}
             >
@@ -147,8 +147,8 @@ export default function HistoryScreen() {
                       percentage >= 75
                         ? Colors.light.success
                         : percentage >= 50
-                        ? Colors.light.warning
-                        : Colors.light.danger,
+                          ? Colors.light.warning
+                          : Colors.light.danger,
                   },
                 ]}
               >

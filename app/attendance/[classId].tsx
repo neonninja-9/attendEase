@@ -44,7 +44,7 @@ export default function AttendanceScreen() {
     const classes = await getClasses();
     const cls = classes.find((c) => c.id === classId);
     setClassItem(cls || null);
-    const studs = await getStudents(classId);
+    const studs = await getStudents();
     studs.sort((a, b) => {
       if (!a.rollNumber && !b.rollNumber) return a.name.localeCompare(b.name);
       if (!a.rollNumber) return 1;

@@ -17,7 +17,7 @@ export interface Student {
   id: string;
   name: string;
   rollNumber: string;
-  classId: string;
+  // classId removed to make students global
 }
 
 export interface AttendanceRecord {
@@ -129,38 +129,25 @@ export async function initializeDefaults(): Promise<void> {
   if (initialized) return;
 
   const existingClasses = await getClasses();
-  let classes: ClassItem[];
-
   if (existingClasses.length === 0) {
-    classes = DEFAULT_CLASSES.map((c) => ({
+    const classes = DEFAULT_CLASSES.map((c) => ({
       id: genId(),
       ...c,
     }));
     await AsyncStorage.setItem(KEYS.CLASSES, JSON.stringify(classes));
-  } else {
-    classes = existingClasses;
   }
-
-  const eligibleClasses = classes.filter(
-    (c) => !EXCLUDED_CODES.includes(c.subjectCode)
-  );
 
   const existingStudents = await getStudents();
   const newStudents: Student[] = [];
+  const existingNames = new Set(existingStudents.map((s) => s.name.toLowerCase().trim()));
 
-  for (const cls of eligibleClasses) {
-    const classStudents = existingStudents.filter((s) => s.classId === cls.id);
-    const existingNames = new Set(classStudents.map((s) => s.name.toLowerCase().trim()));
-
-    for (const name of DEFAULT_STUDENT_NAMES) {
-      if (!existingNames.has(name.toLowerCase().trim())) {
-        newStudents.push({
-          id: genId(),
-          name,
-          rollNumber: "",
-          classId: cls.id,
-        });
-      }
+  for (const name of DEFAULT_STUDENT_NAMES) {
+    if (!existingNames.has(name.toLowerCase().trim())) {
+      newStudents.push({
+        id: genId(),
+        name,
+        rollNumber: "",
+      });
     }
   }
 
@@ -175,11 +162,10 @@ export async function initializeDefaults(): Promise<void> {
 }
 
 export async function checkDuplicateStudentName(
-  classId: string,
   name: string,
   excludeId?: string
 ): Promise<boolean> {
-  const students = await getStudents(classId);
+  const students = await getStudents();
   const normalizedName = name.toLowerCase().trim();
   return students.some(
     (s) => s.name.toLowerCase().trim() === normalizedName && s.id !== excludeId
@@ -224,9 +210,7 @@ export async function deleteClass(id: string): Promise<void> {
   let classes = await getClasses();
   classes = classes.filter((c) => c.id !== id);
   await AsyncStorage.setItem(KEYS.CLASSES, JSON.stringify(classes));
-  let students = await getStudents();
-  students = students.filter((s) => s.classId !== id);
-  await AsyncStorage.setItem(KEYS.STUDENTS, JSON.stringify(students));
+  // Students are no longer deleted when a class is deleted as they are global
   let records = await getAttendanceRecords();
   records = records.filter((r) => r.classId !== id);
   await AsyncStorage.setItem(KEYS.ATTENDANCE, JSON.stringify(records));
@@ -235,11 +219,9 @@ export async function deleteClass(id: string): Promise<void> {
   await AsyncStorage.setItem(KEYS.SESSIONS, JSON.stringify(sessions));
 }
 
-export async function getStudents(classId?: string): Promise<Student[]> {
+export async function getStudents(): Promise<Student[]> {
   const data = await AsyncStorage.getItem(KEYS.STUDENTS);
-  const students: Student[] = data ? JSON.parse(data) : [];
-  if (classId) return students.filter((s) => s.classId === classId);
-  return students;
+  return data ? JSON.parse(data) : [];
 }
 
 export async function addStudent(item: Omit<Student, "id">): Promise<Student> {
@@ -256,12 +238,10 @@ export async function addStudentsBulk(items: Omit<Student, "id">[]): Promise<{ a
   let skipped = 0;
 
   for (const item of items) {
-    const classStudents = [...students, ...newStudents].filter((s) => s.classId === item.classId);
+    const existingNames = new Set([...students, ...newStudents].map(s => s.name.toLowerCase().trim()));
     const normalizedName = item.name.toLowerCase().trim();
-    const isDuplicate = classStudents.some(
-      (s) => s.name.toLowerCase().trim() === normalizedName
-    );
-    if (isDuplicate) {
+
+    if (existingNames.has(normalizedName)) {
       skipped++;
     } else {
       newStudents.push({ id: genId(), ...item });
@@ -291,6 +271,16 @@ export async function deleteStudent(id: string): Promise<void> {
   let students = await getStudents();
   students = students.filter((s) => s.id !== id);
   await AsyncStorage.setItem(KEYS.STUDENTS, JSON.stringify(students));
+  // Also clean up attendance records for this student
+  let records = await getAttendanceRecords();
+  records = records.filter((r) => r.studentId !== id);
+  await AsyncStorage.setItem(KEYS.ATTENDANCE, JSON.stringify(records));
+}
+
+export async function deleteAllStudents(): Promise<void> {
+  await AsyncStorage.setItem(KEYS.STUDENTS, JSON.stringify([]));
+  // Remove all attendance records as they depend on students
+  await AsyncStorage.setItem(KEYS.ATTENDANCE, JSON.stringify([]));
 }
 
 export async function getSessions(classId?: string): Promise<AttendanceSession[]> {
