@@ -117,7 +117,7 @@ export default function AttendanceScreen() {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
       const absentStudents = students.filter((s) => statusMap[s.id] === "absent");
-      const presentStudents = students.filter((s) => statusMap[s.id] === "present");
+
 
       let message = `*Attendance Report*\n`;
       message += `Class: ${classItem?.courseName || "N/A"} (${classItem?.subjectCode || ""})\n`;
@@ -138,22 +138,45 @@ export default function AttendanceScreen() {
 
       const encoded = encodeURIComponent(message);
       let whatsappUrl: string;
-      if (faculty?.whatsappNumber) {
-        whatsappUrl = `https://wa.me/${faculty.whatsappNumber}?text=${encoded}`;
+
+      // Sanitize phone number: remove all non-numeric characters
+      const rawNumber = faculty?.whatsappNumber || "";
+      const sanitizedNumber = rawNumber.replace(/\D/g, "");
+
+      if (sanitizedNumber) {
+        // Use whatsapp:// scheme for direct app opening if possible
+        whatsappUrl = `whatsapp://send?text=${encoded}&phone=${sanitizedNumber}`;
       } else {
-        whatsappUrl = `https://wa.me/?text=${encoded}`;
+        whatsappUrl = `whatsapp://send?text=${encoded}`;
       }
 
-      const canOpen = await Linking.canOpenURL(whatsappUrl);
-      if (canOpen) {
-        await Linking.openURL(whatsappUrl);
-      } else {
+      // Fallback URL using web interface if app is not installed
+      const webUrl = sanitizedNumber
+        ? `https://wa.me/${sanitizedNumber}?text=${encoded}`
+        : `https://wa.me/?text=${encoded}`;
+
+      try {
+        const canOpen = await Linking.canOpenURL(whatsappUrl);
+
+        if (canOpen) {
+          await Linking.openURL(whatsappUrl);
+        } else {
+          // If native app scheme fails, try web fallback
+          // This is especially expected on Web platform or if WhatsApp is not installed
+          const canOpenWeb = await Linking.canOpenURL(webUrl);
+          if (canOpenWeb) {
+            await Linking.openURL(webUrl);
+          } else {
+            throw new Error("Cannot open WhatsApp");
+          }
+        }
+      } catch (err) {
         if (Platform.OS === "web") {
-          (globalThis as any).window?.open?.(whatsappUrl, "_blank");
+          (globalThis as any).window?.open?.(webUrl, "_blank");
         } else {
           Alert.alert(
-            "Attendance Saved",
-            "Records saved successfully. WhatsApp is not available on this device.",
+            "WhatsApp Not Available",
+            "Could not open WhatsApp. It may not be installed on this device.",
             [{ text: "OK", onPress: () => router.back() }]
           );
           return;
@@ -163,7 +186,7 @@ export default function AttendanceScreen() {
       Alert.alert("Success", "Attendance saved and sent!", [
         { text: "OK", onPress: () => router.back() },
       ]);
-    } catch (err) {
+    } catch (_err) {
       Alert.alert("Error", "Failed to save attendance. Please try again.");
     } finally {
       setSaving(false);

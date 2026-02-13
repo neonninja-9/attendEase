@@ -109,7 +109,7 @@ export default function ClassDetailScreen() {
           <Ionicons name="people-outline" size={64} color={Colors.light.border} />
           <Text style={styles.emptyTitle}>No Students</Text>
           <Text style={styles.emptyText}>
-            Go to "Manage Students" on the dashboard to add students.
+            Go to &quot;Manage Students&quot; on the dashboard to add students.
           </Text>
         </View>
       ) : (
