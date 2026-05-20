@@ -17,7 +17,7 @@ import { router, useFocusEffect } from "expo-router";
 import * as Haptics from "expo-haptics";
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system/legacy";
-import * as XLSX from "xlsx";
+import readXlsxFile from "read-excel-file/universal";
 import Colors from "@/constants/colors";
 import {
     getStudents,
@@ -144,6 +144,17 @@ export default function ManageStudentsScreen() {
         setModalVisible(true);
     };
 
+    // Helper: convert base64 string to ArrayBuffer
+    const base64ToArrayBuffer = (base64: string): ArrayBuffer => {
+        const binaryString = globalThis.atob(base64);
+        const len = binaryString.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+        }
+        return bytes.buffer;
+    };
+
     const handleBulkImport = async () => {
         try {
             const result = await DocumentPicker.getDocumentAsync({
@@ -163,21 +174,21 @@ export default function ManageStudentsScreen() {
             const file = result.assets[0];
             const uri = file.uri;
 
-            let parsedStudents: { name: string; rollNumber: string }[] = [];
+            let arrayBuffer: ArrayBuffer;
 
             if (Platform.OS === "web") {
                 const response = await globalThis.fetch(uri);
-                const arrayBuffer = await response.arrayBuffer();
-                const data = new Uint8Array(arrayBuffer);
-                const workbook = XLSX.read(data, { type: "array" });
-                parsedStudents = parseWorkbook(workbook);
+                arrayBuffer = await response.arrayBuffer();
             } else {
                 const fileContent = await FileSystem.readAsStringAsync(uri, {
                     encoding: 'base64',
                 });
-                const workbook = XLSX.read(fileContent, { type: "base64" });
-                parsedStudents = parseWorkbook(workbook);
+                arrayBuffer = base64ToArrayBuffer(fileContent);
             }
+
+            // read-excel-file returns rows as arrays: [[header1, header2, ...], [val1, val2, ...], ...]
+            const rows = await readXlsxFile(arrayBuffer);
+            const parsedStudents = parseRows(rows);
 
             if (parsedStudents.length === 0) {
                 Alert.alert(
@@ -208,13 +219,10 @@ export default function ManageStudentsScreen() {
         }
     };
 
-    const parseWorkbook = (workbook: XLSX.WorkBook): { name: string; rollNumber: string }[] => {
-        const sheetName = workbook.SheetNames[0];
-        if (!sheetName) return [];
-        const sheet = workbook.Sheets[sheetName];
-        const jsonData: Record<string, any>[] = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+    const parseRows = (rows: (string | number | boolean | Date | null)[][]): { name: string; rollNumber: string }[] => {
+        if (!rows || rows.length < 2) return []; // Need at least header + 1 data row
 
-        if (jsonData.length === 0) return [];
+        const headers = rows[0].map((h) => String(h || "").toLowerCase().trim());
 
         const nameKeys = ["name", "student name", "student_name", "studentname", "full name", "fullname", "full_name"];
         const rollKeys = [
@@ -224,41 +232,42 @@ export default function ManageStudentsScreen() {
             "id", "student id", "studentid", "s.no", "sno", "sr no", "sr. no",
         ];
 
-        let nameCol = "";
-        let rollCol = "";
+        let nameIdx = -1;
+        let rollIdx = -1;
 
-        for (const h of Object.keys(jsonData[0])) {
-            const lower = h.toLowerCase().trim();
-            if (!nameCol && nameKeys.includes(lower)) nameCol = h;
-            if (!rollCol && rollKeys.includes(lower)) rollCol = h;
+        // Exact match first
+        for (let i = 0; i < headers.length; i++) {
+            if (nameIdx === -1 && nameKeys.includes(headers[i])) nameIdx = i;
+            if (rollIdx === -1 && rollKeys.includes(headers[i])) rollIdx = i;
         }
 
-        if (!nameCol) {
-            for (const h of Object.keys(jsonData[0])) {
-                const lower = h.toLowerCase().trim();
-                if (lower.includes("name") && !lower.includes("course") && !lower.includes("subject")) {
-                    nameCol = h;
+        // Fuzzy match for name column
+        if (nameIdx === -1) {
+            for (let i = 0; i < headers.length; i++) {
+                if (headers[i].includes("name") && !headers[i].includes("course") && !headers[i].includes("subject")) {
+                    nameIdx = i;
                     break;
                 }
             }
         }
 
-        if (!rollCol) {
-            for (const h of Object.keys(jsonData[0])) {
-                const lower = h.toLowerCase().trim();
-                if (lower.includes("roll") || lower.includes("enroll") || lower.includes("reg")) {
-                    rollCol = h;
+        // Fuzzy match for roll column
+        if (rollIdx === -1) {
+            for (let i = 0; i < headers.length; i++) {
+                if (headers[i].includes("roll") || headers[i].includes("enroll") || headers[i].includes("reg")) {
+                    rollIdx = i;
                     break;
                 }
             }
         }
 
-        if (!nameCol) return [];
+        if (nameIdx === -1) return [];
 
         const students: { name: string; rollNumber: string }[] = [];
-        for (const row of jsonData) {
-            const name = String(row[nameCol] || "").trim();
-            const roll = rollCol ? String(row[rollCol] || "").trim() : "";
+        for (let r = 1; r < rows.length; r++) {
+            const row = rows[r];
+            const name = String(row[nameIdx] || "").trim();
+            const roll = rollIdx >= 0 ? String(row[rollIdx] || "").trim() : "";
             if (name) {
                 students.push({ name, rollNumber: roll });
             }

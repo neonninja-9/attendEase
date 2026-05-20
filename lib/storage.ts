@@ -45,120 +45,25 @@ const KEYS = {
   INITIALIZED: "app_initialized_v2",
 };
 
-const EXCLUDED_CODES = ["BCU441", "CSA401", "CSA421"];
-
-const DEFAULT_CLASSES: Omit<ClassItem, "id">[] = [
-  { subjectCode: "BSU443", courseName: "Behavioural Science- IV (Values & Ethics for Personal & Professional Development)" },
-  { subjectCode: "BCU441", courseName: "Communication Skills - IV (Term Paper)" },
-  { subjectCode: "CSE402", courseName: "Computer Organization and Architecture" },
-  { subjectCode: "CSE405", courseName: "Cryptography & Network Security" },
-  { subjectCode: "CSE401", courseName: "Discrete Mathematics" },
-  { subjectCode: "CSE403", courseName: "Java Programming" },
-  { subjectCode: "CSE423", courseName: "Java Programming Lab" },
-  { subjectCode: "CSE404", courseName: "Operating Systems" },
-  { subjectCode: "CSE424", courseName: "Operating Systems Lab" },
-  { subjectCode: "FLU444", courseName: "French - IV" },
-  { subjectCode: "CSA401", courseName: "Neural Networks and Deep Learning" },
-  { subjectCode: "CSA421", courseName: "Neural Networks and Deep Learning Lab" },
-];
-
-const DEFAULT_STUDENT_NAMES = [
-  "ANJALI BHADORIA",
-  "VINEET MITTAL",
-  "SUNDRAM SINGH",
-  "NITYA JAIN",
-  "ABHISHEK SHARMA",
-  "SAGAR JOSHI",
-  "YASH RANA",
-  "YASH SHARMA",
-  "GOURAV SHARMA",
-  "GAURAV SINGH CHAUHAN",
-  "PRATIK MISHRA",
-  "PIYUSH THAKUR",
-  "HARSHIT PAL",
-  "KANISHK RAJ",
-  "ARYAMA SINGH TOMAR",
-  "ANURAG SINGH",
-  "ANKIT",
-  "DEVANSH GUPTA",
-  "BHANU PRATAP SINGH CHAUHAN",
-  "AYUSH VYAS",
-  "NISHANT KUSHWAH",
-  "RAGINI PARIHAR",
-  "LOVE SHARMA",
-  "ADITYA TIWARI",
-  "DEEPAK SINGH GURJAR",
-  "R HIM KHAN",
-  "LAVLESH",
-  "BHAKTI GOYAL",
-  "ABHISHEK SHRIVASTAVA",
-  "ANSHU KUMAR",
-  "NITIN RAJAK",
-  "PRIYANKA",
-  "AYAAN SIDDIQUI",
-  "GANPAT SINGH TOMAR",
-  "HARI NANDAN",
-  "ADITYA SINGH TOMAR",
-  "SAJAL SHARMA",
-  "VINEET KAURAV",
-  "JAIDEEP KAMTHAN",
-  "NIKHIL CHAUHAN",
-  "VIKASH VIKRAM SINGH",
-  "KRISHNA",
-  "TANMAY JAIN",
-  "JATIN KUSHWAH",
-  "TANU SONI",
-  "TAPSHYA MANGAL",
-  "KM NEHA",
-  "HARSH PARMAR",
-  "VISHWAJEET GURJAR",
-  "ADITYA AGRAWAL",
-  "MANASWI PRAKASH",
-  "KSHITIJ SINGH",
-  "DHRUV JAIN",
-  "MOHIT SHARMA",
-  "HIMANSHU SHARMA",
-];
-
 function genId(): string {
   return Crypto.randomUUID();
 }
 
+// No-op: the app starts with a clean slate.
+// Faculty, classes, and students are all added by the user.
 export async function initializeDefaults(): Promise<void> {
-  const initialized = await AsyncStorage.getItem(KEYS.INITIALIZED);
-  if (initialized) return;
+  // Nothing to seed — the app is generic for any faculty/class.
+}
 
-  const existingClasses = await getClasses();
-  if (existingClasses.length === 0) {
-    const classes = DEFAULT_CLASSES.map((c) => ({
-      id: genId(),
-      ...c,
-    }));
-    await AsyncStorage.setItem(KEYS.CLASSES, JSON.stringify(classes));
-  }
-
-  const existingStudents = await getStudents();
-  const newStudents: Student[] = [];
-  const existingNames = new Set(existingStudents.map((s) => s.name.toLowerCase().trim()));
-
-  for (const name of DEFAULT_STUDENT_NAMES) {
-    if (!existingNames.has(name.toLowerCase().trim())) {
-      newStudents.push({
-        id: genId(),
-        name,
-        rollNumber: "",
-      });
-    }
-  }
-
-  if (newStudents.length > 0) {
-    await AsyncStorage.setItem(
-      KEYS.STUDENTS,
-      JSON.stringify([...existingStudents, ...newStudents])
-    );
-  }
-
-  await AsyncStorage.setItem(KEYS.INITIALIZED, "true");
+export async function resetApp(): Promise<void> {
+  await AsyncStorage.multiRemove([
+    KEYS.FACULTY,
+    KEYS.CLASSES,
+    KEYS.STUDENTS,
+    KEYS.ATTENDANCE,
+    KEYS.SESSIONS,
+    KEYS.INITIALIZED,
+  ]);
 }
 
 export async function checkDuplicateStudentName(

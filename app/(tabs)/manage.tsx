@@ -16,7 +16,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { router, useFocusEffect } from "expo-router";
 import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
-import { getFaculty, saveFaculty, Faculty } from "@/lib/storage";
+import { getFaculty, saveFaculty, resetApp, Faculty } from "@/lib/storage";
 
 export default function ManageScreen() {
     const insets = useSafeAreaInsets();
@@ -130,6 +130,46 @@ export default function ManageScreen() {
                             <View style={styles.menuContent}>
                                 <Text style={styles.menuTitle}>Manage Classes</Text>
                                 <Text style={styles.menuSub}>Add or delete subjects</Text>
+                            </View>
+                            <Ionicons name="chevron-forward" size={20} color={Colors.light.tabIconDefault} />
+                        </Pressable>
+                    </View>
+                </View>
+
+                {/* Danger Zone */}
+                <View style={styles.section}>
+                    <Text style={styles.sectionTitle}>Danger Zone</Text>
+                    <View style={styles.card}>
+                        <Pressable
+                            style={({ pressed }) => [styles.menuItem, pressed && styles.pressed]}
+                            onPress={() => {
+                                Alert.alert(
+                                    "Reset All Data",
+                                    "This will permanently delete ALL classes, students, attendance records, and your profile. This cannot be undone.\n\nAre you sure?",
+                                    [
+                                        { text: "Cancel", style: "cancel" },
+                                        {
+                                            text: "Reset Everything",
+                                            style: "destructive",
+                                            onPress: async () => {
+                                                await resetApp();
+                                                Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+                                                setFaculty(null);
+                                                setName("");
+                                                setWhatsappNumber("");
+                                                Alert.alert("Done", "All data has been cleared. The app is now a clean slate.");
+                                            },
+                                        },
+                                    ]
+                                );
+                            }}
+                        >
+                            <View style={[styles.menuIcon, { backgroundColor: "#FEE2E2" }]}>
+                                <Ionicons name="warning" size={20} color="#DC2626" />
+                            </View>
+                            <View style={styles.menuContent}>
+                                <Text style={[styles.menuTitle, { color: Colors.light.danger }]}>Reset All Data</Text>
+                                <Text style={styles.menuSub}>Delete everything and start fresh</Text>
                             </View>
                             <Ionicons name="chevron-forward" size={20} color={Colors.light.tabIconDefault} />
                         </Pressable>
