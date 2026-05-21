@@ -24,6 +24,7 @@
     },
     "android": {
       "package": "com.attendease",
+      "enableProguardInReleaseBuilds": true,
       "adaptiveIcon": {
         "backgroundColor": "#E0F5F5",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -36,8 +37,7 @@
     },
     "plugins": [
       "expo-router",
-      "expo-font",
-      "expo-web-browser"
+      "expo-font"
     ],
     "experiments": {
       "typedRoutes": true,

@@ -16,7 +16,7 @@ import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
 import {
   getClasses,
-  getStudents,
+  getEnrolledStudents,
   getFaculty,
   saveAttendance,
   ClassItem,
@@ -44,13 +44,7 @@ export default function AttendanceScreen() {
     const classes = await getClasses();
     const cls = classes.find((c) => c.id === classId);
     setClassItem(cls || null);
-    const studs = await getStudents();
-    studs.sort((a, b) => {
-      if (!a.rollNumber && !b.rollNumber) return a.name.localeCompare(b.name);
-      if (!a.rollNumber) return 1;
-      if (!b.rollNumber) return -1;
-      return a.rollNumber.localeCompare(b.rollNumber, undefined, { numeric: true });
-    });
+    const studs = await getEnrolledStudents(classId!);
     setStudents(studs);
     const map: Record<string, "present" | "absent"> = {};
     studs.forEach((s) => {

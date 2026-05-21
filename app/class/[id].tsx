@@ -14,7 +14,7 @@ import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
 import {
   getClasses,
-  getStudents,
+  getEnrolledStudents,
   ClassItem,
   Student,
 } from "@/lib/storage";
@@ -33,14 +33,8 @@ export default function ClassDetailScreen() {
     const cls = classes.find((c) => c.id === id);
     setClassItem(cls || null);
 
-    // Get all students (global list)
-    const studs = await getStudents();
-    studs.sort((a, b) => {
-      if (!a.rollNumber && !b.rollNumber) return a.name.localeCompare(b.name);
-      if (!a.rollNumber) return 1;
-      if (!b.rollNumber) return -1;
-      return a.rollNumber.localeCompare(b.rollNumber, undefined, { numeric: true });
-    });
+    // Get students enrolled in this class
+    const studs = await getEnrolledStudents(id);
     setStudents(studs);
     setLoading(false);
   }, [id]);
@@ -83,6 +77,17 @@ export default function ClassDetailScreen() {
           </Text>
           <Text style={styles.headerSub}>{classItem?.subjectCode}</Text>
         </View>
+        <Pressable
+          onPress={() => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            // @ts-ignore
+            router.push({ pathname: "/students/manage", params: { classId: id } });
+          }}
+          style={styles.manageBtn}
+        >
+          <Ionicons name="people" size={18} color={Colors.light.tint} />
+          <Text style={styles.manageBtnText}>Students</Text>
+        </Pressable>
       </View>
 
       <View style={styles.actionRow}>
@@ -107,9 +112,9 @@ export default function ClassDetailScreen() {
       ) : students.length === 0 ? (
         <View style={styles.center}>
           <Ionicons name="people-outline" size={64} color={Colors.light.border} />
-          <Text style={styles.emptyTitle}>No Students</Text>
+          <Text style={styles.emptyTitle}>No Students Enrolled</Text>
           <Text style={styles.emptyText}>
-            Go to &quot;Manage Students&quot; on the dashboard to add students.
+            Tap "Students" above to add or enroll students in this class.
           </Text>
         </View>
       ) : (
@@ -120,7 +125,7 @@ export default function ClassDetailScreen() {
           contentContainerStyle={[styles.list, { paddingBottom: 40 }]}
           showsVerticalScrollIndicator={false}
           ListHeaderComponent={
-            <Text style={styles.listHeader}>{students.length} student{students.length !== 1 ? "s" : ""}</Text>
+            <Text style={styles.listHeader}>{students.length} student{students.length !== 1 ? "s" : ""} enrolled</Text>
           }
         />
       )}
@@ -151,6 +156,20 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_500Medium",
     color: Colors.light.textSecondary,
     marginTop: 1,
+  },
+  manageBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: Colors.light.accentLight,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+    gap: 5,
+  },
+  manageBtnText: {
+    fontSize: 13,
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.light.tint,
   },
   actionRow: {
     flexDirection: "row",

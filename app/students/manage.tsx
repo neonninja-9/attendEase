@@ -13,7 +13,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { router, useFocusEffect } from "expo-router";
+import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import * as Haptics from "expo-haptics";
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system/legacy";
@@ -21,38 +21,78 @@ import readXlsxFile from "read-excel-file/universal";
 import Colors from "@/constants/colors";
 import {
     getStudents,
+    getEnrolledStudents,
+    getUnenrolledStudents,
     addStudent,
     addStudentsBulk,
     updateStudent,
     deleteStudent,
     deleteAllStudents,
-    checkDuplicateStudentName,
+    enrollStudent,
+    enrollStudentsBulk,
+    unenrollStudent,
+    checkDuplicateRollNumber,
+    getClasses,
+    getEnrollmentCountForStudent,
     Student,
+    ClassItem,
 } from "@/lib/storage";
 
 export default function ManageStudentsScreen() {
     const insets = useSafeAreaInsets();
+    const { classId } = useLocalSearchParams<{ classId?: string }>();
+    const isClassScoped = !!classId;
+
+    const [classItem, setClassItem] = useState<ClassItem | null>(null);
     const [students, setStudents] = useState<Student[]>([]);
+    const [enrollmentCounts, setEnrollmentCounts] = useState<Record<string, number>>({});
     const [loading, setLoading] = useState(true);
     const [modalVisible, setModalVisible] = useState(false);
+    const [enrollModalVisible, setEnrollModalVisible] = useState(false);
     const [editingStudent, setEditingStudent] = useState<Student | null>(null);
     const [studentName, setStudentName] = useState("");
     const [rollNumber, setRollNumber] = useState("");
     const [importing, setImporting] = useState(false);
     const [searchQuery, setSearchQuery] = useState("");
 
+    // For the "Enroll Existing" modal
+    const [unenrolledStudents, setUnenrolledStudents] = useState<Student[]>([]);
+    const [selectedForEnroll, setSelectedForEnroll] = useState<Set<string>>(new Set());
+    const [enrollSearch, setEnrollSearch] = useState("");
+
     const loadData = useCallback(async () => {
         setLoading(true);
-        const studs = await getStudents();
-        studs.sort((a, b) => {
-            if (!a.rollNumber && !b.rollNumber) return a.name.localeCompare(b.name);
-            if (!a.rollNumber) return 1;
-            if (!b.rollNumber) return -1;
-            return a.rollNumber.localeCompare(b.rollNumber, undefined, { numeric: true });
-        });
-        setStudents(studs);
+
+        if (isClassScoped) {
+            // Load class info
+            const classes = await getClasses();
+            const cls = classes.find((c) => c.id === classId);
+            setClassItem(cls || null);
+
+            // Load enrolled students
+            const enrolled = await getEnrolledStudents(classId!);
+            setStudents(enrolled);
+        } else {
+            // Global pool mode
+            const allStudents = await getStudents();
+            allStudents.sort((a, b) => {
+                if (!a.rollNumber && !b.rollNumber) return a.name.localeCompare(b.name);
+                if (!a.rollNumber) return 1;
+                if (!b.rollNumber) return -1;
+                return a.rollNumber.localeCompare(b.rollNumber, undefined, { numeric: true });
+            });
+            setStudents(allStudents);
+
+            // Load enrollment counts for each student
+            const counts: Record<string, number> = {};
+            for (const s of allStudents) {
+                counts[s.id] = await getEnrollmentCountForStudent(s.id);
+            }
+            setEnrollmentCounts(counts);
+        }
+
         setLoading(false);
-    }, []);
+    }, [classId, isClassScoped]);
 
     useFocusEffect(
         useCallback(() => {
@@ -65,16 +105,19 @@ export default function ManageStudentsScreen() {
             Alert.alert("Required", "Please enter the student name.");
             return;
         }
-        const isDuplicate = await checkDuplicateStudentName(
-            studentName.trim(),
-            editingStudent?.id
-        );
-        if (isDuplicate) {
-            Alert.alert(
-                "Duplicate Name",
-                `A student named "${studentName.trim()}" already exists.`
+        // Check for duplicate roll number (names are allowed to repeat)
+        if (rollNumber.trim()) {
+            const isDuplicate = await checkDuplicateRollNumber(
+                rollNumber.trim(),
+                editingStudent?.id
             );
-            return;
+            if (isDuplicate) {
+                Alert.alert(
+                    "Duplicate Roll Number",
+                    `A student with enrollment number "${rollNumber.trim()}" already exists.`
+                );
+                return;
+            }
         }
         if (editingStudent) {
             await updateStudent(editingStudent.id, {
@@ -82,20 +125,43 @@ export default function ManageStudentsScreen() {
                 rollNumber: rollNumber.trim(),
             });
         } else {
-            await addStudent({
+            const newStudent = await addStudent({
                 name: studentName.trim(),
                 rollNumber: rollNumber.trim(),
             });
+            // If class-scoped, also enroll
+            if (isClassScoped) {
+                await enrollStudent(classId!, newStudent.id);
+            }
         }
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         resetModal();
         loadData();
     };
 
+    const handleRemoveFromClass = (student: Student) => {
+        Alert.alert(
+            "Remove from Class",
+            `Remove "${student.name}" from this class? The student will remain in your student pool.`,
+            [
+                { text: "Cancel", style: "cancel" },
+                {
+                    text: "Remove",
+                    style: "destructive",
+                    onPress: async () => {
+                        await unenrollStudent(classId!, student.id);
+                        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+                        loadData();
+                    },
+                },
+            ]
+        );
+    };
+
     const handleDeleteStudent = (student: Student) => {
         Alert.alert(
             "Delete Student",
-            `Remove "${student.name}"? This will delete all their attendance records across all classes.`,
+            `Permanently delete "${student.name}"? This will remove them from all classes and delete all their attendance records.`,
             [
                 { text: "Cancel", style: "cancel" },
                 {
@@ -144,7 +210,38 @@ export default function ManageStudentsScreen() {
         setModalVisible(true);
     };
 
-    // Helper: convert base64 string to ArrayBuffer
+    // ─── Enroll Existing Students Modal ──────────────────────────────────────
+
+    const openEnrollModal = async () => {
+        const unenrolled = await getUnenrolledStudents(classId!);
+        setUnenrolledStudents(unenrolled);
+        setSelectedForEnroll(new Set());
+        setEnrollSearch("");
+        setEnrollModalVisible(true);
+    };
+
+    const toggleEnrollSelection = (studentId: string) => {
+        setSelectedForEnroll((prev) => {
+            const next = new Set(prev);
+            if (next.has(studentId)) {
+                next.delete(studentId);
+            } else {
+                next.add(studentId);
+            }
+            return next;
+        });
+    };
+
+    const handleEnrollSelected = async () => {
+        if (selectedForEnroll.size === 0) return;
+        await enrollStudentsBulk(classId!, Array.from(selectedForEnroll));
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        setEnrollModalVisible(false);
+        loadData();
+    };
+
+    // ─── Excel Import ────────────────────────────────────────────────────────
+
     const base64ToArrayBuffer = (base64: string): ArrayBuffer => {
         const binaryString = globalThis.atob(base64);
         const len = binaryString.length;
@@ -181,12 +278,11 @@ export default function ManageStudentsScreen() {
                 arrayBuffer = await response.arrayBuffer();
             } else {
                 const fileContent = await FileSystem.readAsStringAsync(uri, {
-                    encoding: 'base64',
+                    encoding: "base64",
                 });
                 arrayBuffer = base64ToArrayBuffer(fileContent);
             }
 
-            // read-excel-file returns rows as arrays: [[header1, header2, ...], [val1, val2, ...], ...]
             const rows = await readXlsxFile(arrayBuffer);
             const parsedStudents = parseRows(rows);
 
@@ -204,11 +300,14 @@ export default function ManageStudentsScreen() {
                 rollNumber: s.rollNumber,
             }));
 
-            const importResult = await addStudentsBulk(bulkItems);
+            const importResult = await addStudentsBulk(bulkItems, isClassScoped ? classId : undefined);
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-            let msg = `Successfully imported ${importResult.added} students.`;
+            let msg = `Added ${importResult.added} new students.`;
             if (importResult.skipped > 0) {
-                msg += `\n${importResult.skipped} duplicate name${importResult.skipped > 1 ? "s" : ""} skipped.`;
+                msg += `\n${importResult.skipped} existing student${importResult.skipped > 1 ? "s" : ""} found.`;
+            }
+            if (isClassScoped && importResult.enrolled > 0) {
+                msg += `\n${importResult.enrolled} student${importResult.enrolled > 1 ? "s" : ""} enrolled in this class.`;
             }
             Alert.alert("Import Complete", msg);
             loadData();
@@ -220,7 +319,7 @@ export default function ManageStudentsScreen() {
     };
 
     const parseRows = (rows: (string | number | boolean | Date | null)[][]): { name: string; rollNumber: string }[] => {
-        if (!rows || rows.length < 2) return []; // Need at least header + 1 data row
+        if (!rows || rows.length < 2) return [];
 
         const headers = rows[0].map((h) => String(h || "").toLowerCase().trim());
 
@@ -235,13 +334,11 @@ export default function ManageStudentsScreen() {
         let nameIdx = -1;
         let rollIdx = -1;
 
-        // Exact match first
         for (let i = 0; i < headers.length; i++) {
             if (nameIdx === -1 && nameKeys.includes(headers[i])) nameIdx = i;
             if (rollIdx === -1 && rollKeys.includes(headers[i])) rollIdx = i;
         }
 
-        // Fuzzy match for name column
         if (nameIdx === -1) {
             for (let i = 0; i < headers.length; i++) {
                 if (headers[i].includes("name") && !headers[i].includes("course") && !headers[i].includes("subject")) {
@@ -251,7 +348,6 @@ export default function ManageStudentsScreen() {
             }
         }
 
-        // Fuzzy match for roll column
         if (rollIdx === -1) {
             for (let i = 0; i < headers.length; i++) {
                 if (headers[i].includes("roll") || headers[i].includes("enroll") || headers[i].includes("reg")) {
@@ -263,23 +359,32 @@ export default function ManageStudentsScreen() {
 
         if (nameIdx === -1) return [];
 
-        const students: { name: string; rollNumber: string }[] = [];
+        const parsedStudents: { name: string; rollNumber: string }[] = [];
         for (let r = 1; r < rows.length; r++) {
             const row = rows[r];
             const name = String(row[nameIdx] || "").trim();
             const roll = rollIdx >= 0 ? String(row[rollIdx] || "").trim() : "";
             if (name) {
-                students.push({ name, rollNumber: roll });
+                parsedStudents.push({ name, rollNumber: roll });
             }
         }
 
-        return students;
+        return parsedStudents;
     };
 
-    const filteredStudents = students.filter(s =>
+    // ─── Filtering ───────────────────────────────────────────────────────────
+
+    const filteredStudents = students.filter((s) =>
         s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         s.rollNumber.toLowerCase().includes(searchQuery.toLowerCase())
     );
+
+    const filteredUnenrolled = unenrolledStudents.filter((s) =>
+        s.name.toLowerCase().includes(enrollSearch.toLowerCase()) ||
+        s.rollNumber.toLowerCase().includes(enrollSearch.toLowerCase())
+    );
+
+    // ─── Render ──────────────────────────────────────────────────────────────
 
     const renderStudent = ({ item, index }: { item: Student; index: number }) => (
         <View style={styles.studentRowContainer}>
@@ -292,13 +397,22 @@ export default function ManageStudentsScreen() {
                 </View>
                 <View style={{ flex: 1 }}>
                     <Text style={styles.studentName} numberOfLines={1}>{item.name}</Text>
-                    {item.rollNumber ? (
-                        <Text style={styles.studentRoll}>{item.rollNumber}</Text>
-                    ) : (
-                        <Text style={[styles.studentRoll, { fontStyle: "italic" as const, color: Colors.light.tabIconDefault }]}>
-                            No enrollment no.
-                        </Text>
-                    )}
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                        {item.rollNumber ? (
+                            <Text style={styles.studentRoll}>{item.rollNumber}</Text>
+                        ) : (
+                            <Text style={[styles.studentRoll, { fontStyle: "italic" as const, color: Colors.light.tabIconDefault }]}>
+                                No enrollment no.
+                            </Text>
+                        )}
+                        {!isClassScoped && enrollmentCounts[item.id] !== undefined && (
+                            <View style={styles.enrollBadge}>
+                                <Text style={styles.enrollBadgeText}>
+                                    {enrollmentCounts[item.id]} class{enrollmentCounts[item.id] !== 1 ? "es" : ""}
+                                </Text>
+                            </View>
+                        )}
+                    </View>
                 </View>
             </Pressable>
 
@@ -306,15 +420,30 @@ export default function ManageStudentsScreen() {
                 style={({ pressed }) => [styles.deleteBtn, pressed && { opacity: 0.7 }]}
                 onPress={() => {
                     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                    handleDeleteStudent(item);
+                    if (isClassScoped) {
+                        Alert.alert(item.name, "Choose an action", [
+                            { text: "Remove from Class", onPress: () => handleRemoveFromClass(item) },
+                            { text: "Delete Permanently", style: "destructive", onPress: () => handleDeleteStudent(item) },
+                            { text: "Cancel", style: "cancel" },
+                        ]);
+                    } else {
+                        handleDeleteStudent(item);
+                    }
                 }}
             >
-                <Ionicons name="trash-outline" size={20} color={Colors.light.danger} />
+                <Ionicons
+                    name={isClassScoped ? "close-circle-outline" : "trash-outline"}
+                    size={20}
+                    color={Colors.light.danger}
+                />
             </Pressable>
         </View>
     );
 
     const webTopInset = Platform.OS === "web" ? 67 : 0;
+    const headerTitle = isClassScoped
+        ? `Students — ${classItem?.courseName || "Class"}`
+        : "All Students";
 
     return (
         <View style={styles.container}>
@@ -322,8 +451,8 @@ export default function ManageStudentsScreen() {
                 <Pressable onPress={() => router.back()} style={styles.backBtn}>
                     <Ionicons name="arrow-back" size={24} color={Colors.light.text} />
                 </Pressable>
-                <Text style={styles.headerTitle}>Manage Students</Text>
-                {students.length > 0 && (
+                <Text style={styles.headerTitle} numberOfLines={1}>{headerTitle}</Text>
+                {students.length > 0 && !isClassScoped && (
                     <Pressable
                         onPress={handleDeleteAll}
                         style={({ pressed }) => [styles.headerIconBtn, pressed && { opacity: 0.7 }]}
@@ -331,7 +460,7 @@ export default function ManageStudentsScreen() {
                         <Ionicons name="trash-bin-outline" size={22} color={Colors.light.danger} />
                     </Pressable>
                 )}
-                {students.length === 0 && <View style={styles.backBtn} />}
+                {(students.length === 0 || isClassScoped) && <View style={styles.backBtn} />}
             </View>
 
             <View style={styles.actionRow}>
@@ -353,8 +482,20 @@ export default function ManageStudentsScreen() {
                     onPress={() => setModalVisible(true)}
                 >
                     <Ionicons name="person-add" size={18} color="#fff" />
-                    <Text style={styles.addBtnText}>Add Student</Text>
+                    <Text style={styles.addBtnText}>
+                        {isClassScoped ? "New Student" : "Add Student"}
+                    </Text>
                 </Pressable>
+
+                {isClassScoped && (
+                    <Pressable
+                        style={({ pressed }) => [styles.enrollExistingBtn, pressed && { opacity: 0.9 }]}
+                        onPress={openEnrollModal}
+                    >
+                        <Ionicons name="people" size={18} color={Colors.light.tint} />
+                        <Text style={styles.enrollExistingText}>Add Existing</Text>
+                    </Pressable>
+                )}
 
                 <Pressable
                     style={({ pressed }) => [
@@ -367,7 +508,7 @@ export default function ManageStudentsScreen() {
                 >
                     <Ionicons name="cloud-upload-outline" size={18} color={Colors.light.tint} />
                     <Text style={styles.importBtnText}>
-                        {importing ? "Importing..." : "Import Excel"}
+                        {importing ? "Importing..." : "Import"}
                     </Text>
                 </Pressable>
             </View>
@@ -379,9 +520,16 @@ export default function ManageStudentsScreen() {
             ) : filteredStudents.length === 0 ? (
                 <View style={styles.center}>
                     <Ionicons name="people-outline" size={64} color={Colors.light.border} />
-                    <Text style={styles.emptyTitle}>{searchQuery ? "No Matches" : "No Students"}</Text>
+                    <Text style={styles.emptyTitle}>
+                        {searchQuery ? "No Matches" : isClassScoped ? "No Students Enrolled" : "No Students"}
+                    </Text>
                     <Text style={styles.emptyText}>
-                        {searchQuery ? "Try a different search term" : "Add students manually or import from an Excel file"}
+                        {searchQuery
+                            ? "Try a different search term"
+                            : isClassScoped
+                                ? 'Add new students or tap "Add Existing" to enroll students from your pool'
+                                : "Add students manually or import from an Excel file"
+                        }
                     </Text>
                 </View>
             ) : (
@@ -392,11 +540,15 @@ export default function ManageStudentsScreen() {
                     contentContainerStyle={[styles.list, { paddingBottom: 40 }]}
                     showsVerticalScrollIndicator={false}
                     ListHeaderComponent={
-                        <Text style={styles.listHeader}>{filteredStudents.length} student{filteredStudents.length !== 1 ? "s" : ""}</Text>
+                        <Text style={styles.listHeader}>
+                            {filteredStudents.length} student{filteredStudents.length !== 1 ? "s" : ""}
+                            {isClassScoped ? " enrolled" : ""}
+                        </Text>
                     }
                 />
             )}
 
+            {/* Add / Edit Student Modal */}
             <Modal
                 visible={modalVisible}
                 animationType="slide"
@@ -417,6 +569,14 @@ export default function ManageStudentsScreen() {
                                 <Ionicons name="close" size={24} color={Colors.light.textSecondary} />
                             </Pressable>
                         </View>
+                        {isClassScoped && !editingStudent && (
+                            <View style={styles.enrollHint}>
+                                <Ionicons name="information-circle-outline" size={16} color={Colors.light.tint} />
+                                <Text style={styles.enrollHintText}>
+                                    Student will be added to the pool and enrolled in {classItem?.courseName || "this class"}
+                                </Text>
+                            </View>
+                        )}
                         <Text style={styles.inputLabel}>Student Name *</Text>
                         <TextInput
                             style={styles.input}
@@ -440,17 +600,99 @@ export default function ManageStudentsScreen() {
                             onPress={handleSave}
                         >
                             <Text style={styles.saveBtnText}>
-                                {editingStudent ? "Update" : "Add Student"}
+                                {editingStudent ? "Update" : isClassScoped ? "Add & Enroll" : "Add Student"}
                             </Text>
                         </Pressable>
                     </View>
                 </KeyboardAvoidingView>
             </Modal>
+
+            {/* Enroll Existing Students Modal (class-scoped only) */}
+            <Modal
+                visible={enrollModalVisible}
+                animationType="slide"
+                transparent
+                onRequestClose={() => setEnrollModalVisible(false)}
+            >
+                <View style={styles.modalOverlay}>
+                    <View style={[styles.modalContent, { maxHeight: "80%" }]}>
+                        <View style={styles.modalHandle} />
+                        <View style={styles.modalHeaderRow}>
+                            <Text style={styles.modalTitle}>Enroll Existing Students</Text>
+                            <Pressable onPress={() => setEnrollModalVisible(false)}>
+                                <Ionicons name="close" size={24} color={Colors.light.textSecondary} />
+                            </Pressable>
+                        </View>
+
+                        <View style={[styles.searchContainer, { marginBottom: 12 }]}>
+                            <Ionicons name="search" size={18} color={Colors.light.tabIconDefault} style={{ marginRight: 8 }} />
+                            <TextInput
+                                style={styles.searchInput}
+                                placeholder="Search students..."
+                                value={enrollSearch}
+                                onChangeText={setEnrollSearch}
+                                placeholderTextColor={Colors.light.tabIconDefault}
+                            />
+                        </View>
+
+                        {filteredUnenrolled.length === 0 ? (
+                            <View style={[styles.center, { paddingVertical: 40 }]}>
+                                <Text style={styles.emptyText}>
+                                    {enrollSearch
+                                        ? "No matches found"
+                                        : "All students are already enrolled in this class"
+                                    }
+                                </Text>
+                            </View>
+                        ) : (
+                            <FlatList
+                                data={filteredUnenrolled}
+                                keyExtractor={(item) => item.id}
+                                renderItem={({ item }) => {
+                                    const isSelected = selectedForEnroll.has(item.id);
+                                    return (
+                                        <Pressable
+                                            style={[
+                                                styles.enrollRow,
+                                                isSelected && styles.enrollRowSelected,
+                                            ]}
+                                            onPress={() => toggleEnrollSelection(item.id)}
+                                        >
+                                            <Ionicons
+                                                name={isSelected ? "checkmark-circle" : "ellipse-outline" as any}
+                                                size={24}
+                                                color={isSelected ? Colors.light.tint : Colors.light.border}
+                                            />
+                                            <View style={{ flex: 1 }}>
+                                                <Text style={styles.studentName}>{item.name}</Text>
+                                                {item.rollNumber ? (
+                                                    <Text style={styles.studentRoll}>{item.rollNumber}</Text>
+                                                ) : null}
+                                            </View>
+                                        </Pressable>
+                                    );
+                                }}
+                                showsVerticalScrollIndicator={false}
+                                style={{ maxHeight: 400 }}
+                            />
+                        )}
+
+                        {selectedForEnroll.size > 0 && (
+                            <Pressable
+                                style={({ pressed }) => [styles.saveBtn, pressed && { opacity: 0.85 }, { marginTop: 12 }]}
+                                onPress={handleEnrollSelected}
+                            >
+                                <Text style={styles.saveBtnText}>
+                                    Enroll {selectedForEnroll.size} Student{selectedForEnroll.size > 1 ? "s" : ""}
+                                </Text>
+                            </Pressable>
+                        )}
+                    </View>
+                </View>
+            </Modal>
         </View>
     );
 }
-
-
 
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: Colors.light.background },
@@ -465,12 +707,13 @@ const styles = StyleSheet.create({
         borderBottomColor: Colors.light.borderLight,
     },
     headerTitle: {
-        fontSize: 20,
+        fontSize: 18,
         fontFamily: "Inter_700Bold",
         color: Colors.light.text,
+        flex: 1,
+        textAlign: "center",
     },
     backBtn: { width: 40, height: 40, alignItems: "center", justifyContent: "center" },
-
     headerIconBtn: {
         width: 40,
         height: 40,
@@ -499,12 +742,11 @@ const styles = StyleSheet.create({
         color: Colors.light.text,
         height: "100%",
     },
-
     buttonsRow: {
         flexDirection: "row",
         paddingHorizontal: 16,
         marginBottom: 8,
-        gap: 10,
+        gap: 8,
     },
     addBtn: {
         flex: 1,
@@ -518,11 +760,26 @@ const styles = StyleSheet.create({
     },
     addBtnText: {
         color: "#fff",
-        fontSize: 14,
+        fontSize: 13,
+        fontFamily: "Inter_600SemiBold",
+    },
+    enrollExistingBtn: {
+        flex: 1,
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "center",
+        borderWidth: 1.5,
+        borderColor: Colors.light.tint,
+        padding: 12,
+        borderRadius: 12,
+        gap: 6,
+    },
+    enrollExistingText: {
+        color: Colors.light.tint,
+        fontSize: 13,
         fontFamily: "Inter_600SemiBold",
     },
     importBtn: {
-        flex: 1,
         flexDirection: "row",
         alignItems: "center",
         justifyContent: "center",
@@ -534,10 +791,9 @@ const styles = StyleSheet.create({
     },
     importBtnText: {
         color: Colors.light.tint,
-        fontSize: 14,
+        fontSize: 13,
         fontFamily: "Inter_600SemiBold",
     },
-
     listHeader: {
         fontSize: 13,
         fontFamily: "Inter_500Medium",
@@ -547,7 +803,6 @@ const styles = StyleSheet.create({
         letterSpacing: 0.5,
     },
     list: { padding: 16, gap: 2 },
-
     studentRowContainer: {
         flexDirection: "row",
         alignItems: "center",
@@ -573,7 +828,6 @@ const styles = StyleSheet.create({
         borderWidth: 1,
         borderColor: Colors.light.border,
     },
-
     pressed: { opacity: 0.9, transform: [{ scale: 0.98 }] },
     indexCircle: {
         width: 32,
@@ -599,6 +853,17 @@ const styles = StyleSheet.create({
         color: Colors.light.textSecondary,
         marginTop: 1,
     },
+    enrollBadge: {
+        backgroundColor: Colors.light.accentLight,
+        paddingHorizontal: 6,
+        paddingVertical: 2,
+        borderRadius: 6,
+    },
+    enrollBadgeText: {
+        fontSize: 10,
+        fontFamily: "Inter_500Medium",
+        color: Colors.light.tint,
+    },
     center: {
         flex: 1,
         justifyContent: "center",
@@ -618,7 +883,6 @@ const styles = StyleSheet.create({
         color: Colors.light.textSecondary,
         textAlign: "center",
     },
-
     modalOverlay: {
         flex: 1,
         justifyContent: "flex-end",
@@ -650,6 +914,21 @@ const styles = StyleSheet.create({
         fontFamily: "Inter_600SemiBold",
         color: Colors.light.text,
     },
+    enrollHint: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 8,
+        backgroundColor: Colors.light.accentLight,
+        padding: 10,
+        borderRadius: 10,
+        marginBottom: 16,
+    },
+    enrollHintText: {
+        fontSize: 12,
+        fontFamily: "Inter_400Regular",
+        color: Colors.light.tint,
+        flex: 1,
+    },
     inputLabel: {
         fontSize: 13,
         fontFamily: "Inter_500Medium",
@@ -679,5 +958,17 @@ const styles = StyleSheet.create({
         color: "#fff",
         fontSize: 16,
         fontFamily: "Inter_600SemiBold",
+    },
+    enrollRow: {
+        flexDirection: "row",
+        alignItems: "center",
+        padding: 12,
+        borderRadius: 12,
+        gap: 12,
+        marginBottom: 4,
+        backgroundColor: Colors.light.background,
+    },
+    enrollRowSelected: {
+        backgroundColor: Colors.light.accentLight,
     },
 });
